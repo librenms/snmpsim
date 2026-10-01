@@ -3,10 +3,10 @@
 The `Dockerfile` in the repository root builds three images from the snmpsim
 sources in this repository:
 
-* `ghcr.io/jellyfrog/snmpsim` – snmpsim, listening on UDP port `1161`.
-* `ghcr.io/jellyfrog/snmpsim:<tag>-lite` – the lightweight, faster
+* `ghcr.io/librenms/snmpsim` – snmpsim, listening on UDP port `1161`.
+* `ghcr.io/librenms/snmpsim:<tag>-lite` – the lightweight, faster
   SNMPv1/v2c-only responder, listening on UDP port `1161`.
-* `ghcr.io/jellyfrog/snmpsim:<tag>-snmptrapd` – a PySNMP-based trap/inform
+* `ghcr.io/librenms/snmpsim:<tag>-snmptrapd` – a PySNMP-based trap/inform
   receiver inspired by `snmpreceiver/snmptrapd.py`, listening on UDP port `1162`.
 
 The lite responder and the trap receiver are published as `-lite` and
@@ -26,7 +26,7 @@ To use your own snmpwalks you should mount a folder with snmpwalks like this:
 
     docker run -v /somewhere/with/snmpwalks:/usr/local/snmpsim/data \
                -p 161:1161/udp \
-               ghcr.io/jellyfrog/snmpsim:master
+               ghcr.io/librenms/snmpsim:v2
 
 The filename determines the SNMP community name.
 
@@ -41,7 +41,7 @@ both `data/` and `variation/` from it.
 To give snmpsim more flags, add them after the image name:
 
     docker run -p 161:1161/udp \
-               ghcr.io/jellyfrog/snmpsim:master \
+               ghcr.io/librenms/snmpsim:v2 \
                --v3-user=testing --v3-auth-key=testing123
 
 The image always adds `--agent-udpv4-endpoint=0.0.0.0:1161`. To replace it,
@@ -54,14 +54,14 @@ data files and the same `SIGHUP` reload:
 
     docker run -v /somewhere/with/snmpwalks:/usr/local/snmpsim/data \
                -p 161:1161/udp \
-               ghcr.io/jellyfrog/snmpsim:master-lite
+               ghcr.io/librenms/snmpsim:v2-lite
 
 It can answer requests from several processes. Set `SNMPSIM_WORKERS` (or give
 `--workers`) to a number, or to `auto` for one process per CPU the container may
 use. `auto` honours CPU limits such as `docker run --cpus=2`:
 
     docker run --cpus=2 -e SNMPSIM_WORKERS=auto -p 161:1161/udp \
-               ghcr.io/jellyfrog/snmpsim:master-lite
+               ghcr.io/librenms/snmpsim:v2-lite
 
 The default is one process. Each process keeps its own variation module state,
 so for example values SET through the `writecache` module are only seen by the
@@ -73,7 +73,7 @@ All images support a read-only root filesystem. snmpsim writes its index cache
 to `/tmp`, so mount a writable `/tmp`:
 
     docker run --read-only --tmpfs /tmp -p 161:1161/udp \
-               ghcr.io/jellyfrog/snmpsim:master
+               ghcr.io/librenms/snmpsim:v2
 
 The trap receiver writes nothing unless `SNMPTRAPD_LOG_FILE` is set.
 
@@ -81,7 +81,7 @@ In Kubernetes, set `readOnlyRootFilesystem: true` and mount an `emptyDir` at `/t
 
 ### Trap / Inform receiver
 
-    docker run -p 162:1162/udp ghcr.io/jellyfrog/snmpsim:master-snmptrapd
+    docker run -p 162:1162/udp ghcr.io/librenms/snmpsim:v2-snmptrapd
 
 The receiver respects these optional variables:
 
