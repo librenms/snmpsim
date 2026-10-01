@@ -26,6 +26,11 @@ To use your own snmpwalks you should mount a folder with snmpwalks like this:
 
 The filename determines the SNMP community name.
 
+Changes to existing snmpwalk files are picked up automatically. To pick up
+added or removed files without a restart, send the container a `SIGHUP`:
+
+    docker kill --signal=HUP <container>
+
 You can also mount the whole `/usr/local/snmpsim` directory. snmpsim then reads
 both `data/` and `variation/` from it.
 

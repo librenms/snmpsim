@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import functools
 import os
+import signal
 import sys
 import traceback
 from hashlib import md5
@@ -624,13 +625,43 @@ configured automatically based on simulation data file paths relative to
     with daemon.PrivilegesOf(args.process_user, args.process_group):
         variation.initialize_variation_modules(variation_modules, mode="variating")
 
-    def configure_managed_objects(
-        data_dirs, data_index_instrum_controller, snmp_engine=None, snmp_context=None
-    ):
-        """Build pysnmp Managed Objects base from data files information"""
+    def unregister_community(snmp_engine, snmp_context, community_name):
+        """Undo the community set up done by configure_managed_objects"""
+        agent_name = md5(univ.OctetString(community_name).asOctets()).hexdigest()
 
-        _mib_instrums = {}
+        if not args.v3_only and snmp_engine:
+            config.delete_v1_system(snmp_engine, agent_name)
+
+        snmp_context.unregister_context_name(agent_name)
+
+        if len(community_name) <= 32:
+            snmp_context.unregister_context_name(community_name)
+
+    def configure_managed_objects(
+        data_dirs,
+        data_index_instrum_controller,
+        snmp_engine=None,
+        snmp_context=None,
+        loaded=None,
+        registered=None,
+        force_index_rebuild=False,
+    ):
+        """Build pysnmp Managed Objects base from data files information
+
+        Data files already in `loaded` (full path to (DataFile, MIB
+        instrumentation)) are reused, new ones are added to it. `registered`
+        maps community names to the MIB instrumentation they are configured
+        with, communities whose data file is gone are unregistered. Returns
+        the full paths of the data files in use.
+        """
+        if loaded is None:
+            loaded = {}
+
+        if registered is None:
+            registered = {}
+
         _data_files = {}
+        _in_use = set()
 
         data_files = {
             data_dir: datafile.get_data_files(data_dir)
@@ -639,8 +670,13 @@ configured automatically based on simulation data file paths relative to
         }
 
         indexed = datafile.build_indices(
-            [data_file for files in data_files.values() for data_file in files],
-            args.force_index_rebuild,
+            [
+                data_file
+                for files in data_files.values()
+                for data_file in files
+                if data_file[0] not in loaded
+            ],
+            force_index_rebuild,
             args.validate_data,
         )
 
@@ -674,26 +710,33 @@ configured automatically based on simulation data file paths relative to
                     )
                     continue
 
-                elif full_path in _mib_instrums:
-                    mib_instrum = _mib_instrums[full_path]
-                    log.info(f"Configuring *shared* {mib_instrum}")
+                elif full_path in loaded:
+                    mib_instrum = loaded[full_path][1]
+
+                    if full_path in _in_use:
+                        log.info(f"Configuring *shared* {mib_instrum}")
+
+                    else:
+                        log.info(f"Configuring {mib_instrum}")
 
                 else:
                     data_file = datafile.DataFile(
                         full_path, text_parser, variation_modules
                     )
                     data_file.index_text(
-                        args.force_index_rebuild and full_path not in indexed,
+                        force_index_rebuild and full_path not in indexed,
                         args.validate_data,
                     )
 
                     MibController = controller.MIB_CONTROLLERS[data_file.layout]
                     mib_instrum = MibController(data_file)
 
-                    _mib_instrums[full_path] = mib_instrum
-                    _data_files[community_name] = full_path
+                    loaded[full_path] = data_file, mib_instrum
 
                     log.info(f"Configuring {mib_instrum}")
+
+                _data_files[community_name] = full_path
+                _in_use.add(full_path)
 
                 log.info(f"SNMPv1/2c community name: {community_name}")
 
@@ -703,20 +746,26 @@ configured automatically based on simulation data file paths relative to
 
                 context_name = agent_name
 
-                if not args.v3_only:
-                    # snmpCommunityTable::snmpCommunityIndex can't be > 32
-                    if snmp_engine:  # Add check for snmp_engine
-                        config.add_v1_system(
-                            snmp_engine,
-                            agent_name,
-                            community_name,
-                            contextName=context_name,
-                        )
+                if registered.get(community_name) is not mib_instrum:
+                    if community_name in registered:
+                        unregister_community(snmp_engine, snmp_context, community_name)
 
-                snmp_context.register_context_name(context_name, mib_instrum)
+                    if not args.v3_only:
+                        # snmpCommunityTable::snmpCommunityIndex can't be > 32
+                        if snmp_engine:  # Add check for snmp_engine
+                            config.add_v1_system(
+                                snmp_engine,
+                                agent_name,
+                                community_name,
+                                contextName=context_name,
+                            )
 
-                if len(community_name) <= 32:
-                    snmp_context.register_context_name(community_name, mib_instrum)
+                    snmp_context.register_context_name(context_name, mib_instrum)
+
+                    if len(community_name) <= 32:
+                        snmp_context.register_context_name(community_name, mib_instrum)
+
+                    registered[community_name] = mib_instrum
 
                 data_index_instrum_controller.add_data_file(
                     full_path, community_name, context_name
@@ -733,8 +782,51 @@ configured automatically based on simulation data file paths relative to
 
             log.msg.dec_ident()
 
-        del _mib_instrums
-        del _data_files
+        for community_name in set(registered) - set(_data_files):
+            log.info(f"Removing SNMPv1/2c community name: {community_name}")
+            unregister_community(snmp_engine, snmp_context, community_name)
+            del registered[community_name]
+
+        return _in_use
+
+    # (snmp_engine, snmp_context, data_dirs, data_index_instrum_controller,
+    #  loaded data files, registered communities) to reload on SIGHUP
+    reloadable_contexts = []
+
+    def reload_data_files():
+        """Pick up added and removed data files"""
+        log.info("Reloading simulation data files...")
+
+        for (
+            snmp_engine,
+            snmp_context,
+            ctx_data_dirs,
+            data_index_instrum_controller,
+            loaded,
+            registered,
+        ) in reloadable_contexts:
+            data_index_instrum_controller.clear()
+
+            try:
+                in_use = configure_managed_objects(
+                    ctx_data_dirs,
+                    data_index_instrum_controller,
+                    snmp_engine,
+                    snmp_context,
+                    loaded,
+                    registered,
+                )
+
+            except Exception as exc:
+                log.error("Failed to reload simulation data files: %s" % exc)
+                continue
+
+            for full_path in set(loaded) - in_use:
+                data_file, _ = loaded.pop(full_path)
+                log.info(f"Removing {data_file}")
+                data_file.close()
+
+        log.info("Simulation data files reloaded")
 
     # Bind transport endpoints
     for idx, opt in enumerate(snmp_args):
@@ -802,13 +894,31 @@ configured automatically based on simulation data file paths relative to
                         controller.DataIndexInstrumController()
                     )
 
+                    ctx_data_dirs = ctx_data_dirs or data_dirs or confdir.data
+                    loaded = {}
+                    registered = {}
+
                     with daemon.PrivilegesOf(args.process_user, args.process_group):
                         configure_managed_objects(
-                            ctx_data_dirs or data_dirs or confdir.data,
+                            ctx_data_dirs,
                             data_index_instrum_controller,
                             snmp_engine,
                             snmp_context,
+                            loaded,
+                            registered,
+                            args.force_index_rebuild,
                         )
+
+                    reloadable_contexts.append(
+                        (
+                            snmp_engine,
+                            snmp_context,
+                            ctx_data_dirs,
+                            data_index_instrum_controller,
+                            loaded,
+                            registered,
+                        )
+                    )
 
                 # Configure access to data index
 
@@ -1085,6 +1195,16 @@ configured automatically based on simulation data file paths relative to
             timeout = opt[1]
 
     transport_dispatcher.job_started(1)  # server job would never finish
+
+    if hasattr(signal, "SIGHUP"):
+        try:
+            transport_dispatcher.loop.add_signal_handler(
+                signal.SIGHUP, reload_data_files
+            )
+
+        except (RuntimeError, ValueError):
+            # not running in the main thread
+            pass
 
     with daemon.PrivilegesOf(args.process_user, args.process_group, final=True):
         try:

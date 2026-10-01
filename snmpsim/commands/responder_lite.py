@@ -326,12 +326,21 @@ def main():
     )
 
     def configure_managed_objects(
-        data_dirs, data_index_instrum_controller, snmp_engine=None, snmp_context=None
+        data_dirs,
+        data_index_instrum_controller,
+        contexts,
+        loaded,
+        force_index_rebuild=False,
     ):
-        """Build pysnmp Managed Objects base from data files information"""
+        """Build pysnmp Managed Objects base from data files information
 
-        _mib_instrums = {}
+        Data files already in `loaded` (full path to (DataFile, MIB
+        instrumentation)) are reused, new ones are added to it. Returns the
+        full paths of the data files in use.
+        """
+
         _data_files = {}
+        _in_use = set()
 
         data_files = {
             data_dir: datafile.get_data_files(data_dir)
@@ -340,8 +349,13 @@ def main():
         }
 
         indexed = datafile.build_indices(
-            [data_file for files in data_files.values() for data_file in files],
-            args.force_index_rebuild,
+            [
+                data_file
+                for files in data_files.values()
+                for data_file in files
+                if data_file[0] not in loaded
+            ],
+            force_index_rebuild,
             args.validate_data,
         )
 
@@ -375,26 +389,33 @@ def main():
                     )
                     continue
 
-                elif full_path in _mib_instrums:
-                    mib_instrum = _mib_instrums[full_path]
-                    log.info(f"Configuring *shared* {mib_instrum}")
+                elif full_path in loaded:
+                    mib_instrum = loaded[full_path][1]
+
+                    if full_path in _in_use:
+                        log.info(f"Configuring *shared* {mib_instrum}")
+
+                    else:
+                        log.info(f"Configuring {mib_instrum}")
 
                 else:
                     data_file = datafile.DataFile(
                         full_path, text_parser, variation_modules, preEncode=True
                     )
                     data_file.index_text(
-                        args.force_index_rebuild and full_path not in indexed,
+                        force_index_rebuild and full_path not in indexed,
                         args.validate_data,
                     )
 
                     MibController = controller.MIB_CONTROLLERS[data_file.layout]
                     mib_instrum = MibController(data_file)
 
-                    _mib_instrums[full_path] = mib_instrum
-                    _data_files[community_name] = full_path
+                    loaded[full_path] = data_file, mib_instrum
 
                     log.info(f"Configuring {mib_instrum}")
+
+                _data_files[community_name] = full_path
+                _in_use.add(full_path)
 
                 log.info(f"SNMPv1/2c community name: {community_name}")
 
@@ -404,8 +425,7 @@ def main():
 
             log.msg.dec_ident()
 
-        del _mib_instrums
-        del _data_files
+        return _in_use
 
     def get_bulk_handler(
         req_var_binds,
@@ -444,7 +464,7 @@ def main():
 
     @functools.lru_cache(maxsize=4096)
     def select_context(transport_domain, source_address, community_name):
-        """Pick data file context, these do not change after start-up"""
+        """Pick data file context, cleared when data files are reloaded"""
         for candidate in datafile.probe_context(
             transport_domain,
             (source_address,),
@@ -730,16 +750,52 @@ def main():
         "Maximum number of variable bindings in SNMP response: %s" % args.max_var_binds
     )
 
-    data_index_instrum_controller = controller.DataIndexInstrumController()
+    # full path -> (DataFile, MIB instrumentation), kept across reloads
+    loaded_data_files = {}
 
-    contexts = {univ.OctetString("index"): data_index_instrum_controller}
+    def load_contexts(force_index_rebuild=False):
+        """Map community names to the data files currently on disk"""
+        data_index_instrum_controller = controller.DataIndexInstrumController()
 
-    with daemon.PrivilegesOf(args.process_user, args.process_group):
-        configure_managed_objects(
-            args.data_dirs or confdir.data, data_index_instrum_controller
+        new_contexts = {
+            univ.OctetString("index"): data_index_instrum_controller,
+            "index": data_index_instrum_controller,
+        }
+
+        in_use = configure_managed_objects(
+            args.data_dirs or confdir.data,
+            data_index_instrum_controller,
+            new_contexts,
+            loaded_data_files,
+            force_index_rebuild,
         )
 
-    contexts["index"] = data_index_instrum_controller
+        for full_path in set(loaded_data_files) - in_use:
+            data_file, _ = loaded_data_files.pop(full_path)
+            log.info(f"Removing {data_file}")
+            data_file.close()
+
+        return new_contexts
+
+    def reload_data_files():
+        """Pick up added and removed data files, e.g. on SIGHUP"""
+        log.info("Reloading simulation data files...")
+
+        try:
+            new_contexts = load_contexts()
+
+        except Exception as exc:
+            log.error("Failed to reload simulation data files: %s" % exc)
+            return
+
+        contexts.clear()
+        contexts.update(new_contexts)
+        select_context.cache_clear()
+
+        log.info("Simulation data files reloaded")
+
+    with daemon.PrivilegesOf(args.process_user, args.process_group):
+        contexts = load_contexts(args.force_index_rebuild)
 
     # Configure socket server
     server_sockets = []
@@ -788,12 +844,20 @@ def main():
 
         open_server_socket(agent_udpv6_endpoint, transport_domain, ipv6=True)
 
-    def serve(loop):
+    def serve(loop, on_reload=reload_data_files):
         """Answer requests until interrupted or the loop is stopped"""
         variation.initialize_variation_modules(variation_modules, mode="variating")
 
         for sock, transport_domain in server_sockets:
             loop.add_reader(sock, receive, sock, transport_domain)
+
+        if hasattr(signal, "SIGHUP"):
+            try:
+                loop.add_signal_handler(signal.SIGHUP, on_reload)
+
+            except (RuntimeError, ValueError):
+                # not running in the main thread
+                pass
 
         try:
             loop.run_forever()
@@ -820,6 +884,9 @@ def main():
 
             for sock, _ in server_sockets:
                 loop.remove_reader(sock)
+
+            if hasattr(signal, "SIGHUP"):
+                loop.remove_signal_handler(signal.SIGHUP)
 
     def start_worker():
         """Fork a process serving requests from the shared sockets"""
@@ -921,8 +988,19 @@ def main():
 
             loop.call_later(1, reap_workers)
 
+        def reload_all():
+            # workers find the indices built here up to date
+            reload_data_files()
+
+            for pid in workers:
+                try:
+                    os.kill(pid, signal.SIGHUP)
+
+                except ProcessLookupError:
+                    pass
+
         try:
-            serve(loop)
+            serve(loop, reload_all)
 
         finally:
             stop_workers(workers)

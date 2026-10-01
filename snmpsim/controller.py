@@ -128,9 +128,8 @@ class DataIndexInstrumController:
     index_sub_oid = (1,)
 
     def __init__(self, base_oid=(1, 3, 6, 1, 4, 1, 20408, 999)):
-        self._db = indices.OidOrderedDict()
         self._index_oid = base_oid + self.index_sub_oid
-        self._idx = 1
+        self.clear()
 
     def __str__(self):
         return "<index> controller"
@@ -153,6 +152,10 @@ class DataIndexInstrumController:
 
     def write_variables(self, *var_binds, **context):
         return [(vb[0], exval.noSuchInstance) for vb in var_binds]
+
+    def clear(self):
+        self._db = indices.OidOrderedDict()
+        self._idx = 1
 
     def add_data_file(self, *args):
         for idx in range(len(args)):
