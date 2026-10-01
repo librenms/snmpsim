@@ -6,6 +6,8 @@
 #
 import asyncio
 import importlib
+import math
+import os
 import sys
 import threading
 
@@ -32,6 +34,73 @@ Documentation and support at https://www.pysnmp.com/snmpsim
     pyasn1.__version__,
     sys.version,
 )
+
+
+def _cgroup_cpu_limit(root="/sys/fs/cgroup"):
+    """CPU quota of this process's cgroup as a number of CPUs or None"""
+    limits = []
+
+    # cgroup v2: "<quota> <period>" or "max <period>" in cpu.max of the
+    # process's cgroup and of its ancestors
+    try:
+        with open("/proc/self/cgroup") as f:
+            path = next(
+                (line[3:].strip() for line in f if line.startswith("0::")), None
+            )
+
+    except OSError:
+        path = None
+
+    if path is not None:
+        path = path.strip("/")
+
+        while True:
+            try:
+                with open(os.path.join(root, path, "cpu.max")) as f:
+                    quota, period = f.read().split()
+
+                if quota != "max":
+                    limits.append(int(quota) / int(period))
+
+            except (OSError, ValueError):
+                pass
+
+            if not path:
+                break
+
+            path = os.path.dirname(path)
+
+    # cgroup v1, as mounted inside a container
+    try:
+        with open(os.path.join(root, "cpu", "cpu.cfs_quota_us")) as f:
+            quota = int(f.read())
+
+        with open(os.path.join(root, "cpu", "cpu.cfs_period_us")) as f:
+            period = int(f.read())
+
+        if quota > 0 and period > 0:
+            limits.append(quota / period)
+
+    except (OSError, ValueError):
+        pass
+
+    return min(limits) if limits else None
+
+
+def available_cpus():
+    """Number of CPUs this process can use, honouring container CPU limits"""
+    try:
+        cpus = len(os.sched_getaffinity(0))
+
+    except AttributeError:  # not available on all platforms
+        cpus = os.cpu_count() or 1
+
+    limit = _cgroup_cpu_limit()
+
+    if limit is not None:
+        cpus = min(cpus, max(1, math.ceil(limit)))
+
+    return cpus
 
 
 def try_load(module, package=None):

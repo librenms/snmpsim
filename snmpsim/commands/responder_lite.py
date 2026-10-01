@@ -61,6 +61,28 @@ DESCRIPTION = (
 )
 
 
+def _auto_workers():
+    # workers are forked processes
+    return utils.available_cpus() if hasattr(os, "fork") else 1
+
+
+def parse_workers(value):
+    """Number of worker processes, 'auto' or 0 for one per available CPU"""
+    if value.strip().lower() == "auto":
+        return _auto_workers()
+
+    try:
+        workers = int(value)
+
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a number or 'auto', got {value!r}")
+
+    if workers < 0:
+        raise argparse.ArgumentTypeError("must not be negative")
+
+    return workers or _auto_workers()
+
+
 def main():
     # Python 3.14+ no longer auto-creates a default event loop.
     try:
@@ -213,10 +235,12 @@ def main():
 
     parser.add_argument(
         "--workers",
-        type=int,
-        default=1,
-        metavar="<N>",
-        help="Number of processes answering requests in parallel. Each keeps "
+        type=parse_workers,
+        default=os.environ.get("SNMPSIM_WORKERS", "1"),
+        metavar="<N|auto>",
+        help="Number of processes answering requests in parallel, 'auto' or 0 "
+        "for one per available CPU (honours container CPU limits). Defaults "
+        "to the SNMPSIM_WORKERS environment variable or 1. Each process keeps "
         "its own variation module state, so e.g. values SET through the "
         "writecache module are only seen by the process that handled the SET",
     )
@@ -253,9 +277,6 @@ def main():
     )
 
     args = parser.parse_args()
-
-    if args.workers < 1:
-        parser.error("--workers must be at least 1")
 
     if args.workers > 1 and not hasattr(os, "fork"):
         parser.error("--workers above 1 is not supported on this platform")

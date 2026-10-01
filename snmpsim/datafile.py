@@ -20,6 +20,7 @@ from pysnmp.smi.error import MibOperationError
 from snmpsim import confdir
 from snmpsim import fastber
 from snmpsim import log
+from snmpsim import utils
 from snmpsim import variation
 from snmpsim.error import NoDataNotification
 from snmpsim.error import SnmpsimError
@@ -435,11 +436,7 @@ class DataFile(AbstractLayout):
 
 
 def _available_cpus():
-    try:
-        return len(os.sched_getaffinity(0))
-
-    except AttributeError:  # not available on all platforms
-        return os.cpu_count() or 1
+    return utils.available_cpus()
 
 
 def _build_index(text_file, record_type, cache_dir, validate_data):
