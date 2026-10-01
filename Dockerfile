@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# ---- Build stage: install snmpsim and its locked deps into a virtualenv ----
+# ---- Build stages: install snmpsim and its locked deps into a virtualenv ----
 # Debian's own python3 is the same interpreter, at the same path
 # (/usr/bin/python3), as in the distroless runtime, so the venv works there.
-FROM debian:trixie-slim AS builder
+FROM debian:trixie-slim AS builder-base
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -21,6 +21,9 @@ ENV UV_PYTHON=/usr/bin/python3 \
 
 WORKDIR /src
 
+# snmpsim with SNMPv3 privacy (cryptography) and MIB compilation (pysmi)
+FROM builder-base AS builder
+
 # Dependencies first, so this layer is reused until uv.lock changes
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
@@ -37,13 +40,31 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # mount path.
 RUN ln -s /usr/local/snmpsim /opt/venv/snmpsim
 
-# ---- base: shared runtime (distroless, no shell, runs as uid 65532) ----
-FROM gcr.io/distroless/python3-debian13:nonroot AS base
+# snmpsim without extras, enough for the SNMPv1/v2c-only lite responder
+FROM builder-base AS builder-lite
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project --no-dev
+
+COPY . .
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-editable --no-dev
+
+RUN ln -s /usr/local/snmpsim /opt/venv/snmpsim
+
+# ---- runtime: shared runtime (distroless, no shell, runs as uid 65532) ----
+FROM gcr.io/distroless/python3-debian13:nonroot AS runtime
 
 LABEL maintainer="support@lextudio.com"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
+
+# ---- base: runtime with the full virtualenv ----
+FROM runtime AS base
 
 COPY --from=builder /opt/venv /opt/venv
 
@@ -59,7 +80,9 @@ EXPOSE 1162/udp
 ENTRYPOINT ["/opt/venv/bin/python", "/opt/snmptrapd.py"]
 
 # ---- snmpsim-lite: the lightweight SNMPv1/v2c simulator ----
-FROM base AS snmpsim-lite
+FROM runtime AS snmpsim-lite
+
+COPY --from=builder-lite /opt/venv /opt/venv
 
 LABEL description="Docker image for running the lightweight snmpsim SNMPv1/v2c responder"
 
