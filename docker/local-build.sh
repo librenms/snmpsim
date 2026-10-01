@@ -6,7 +6,8 @@
 #
 # Options:
 #   -t, --tag TAG         Image tag (default: local/<target>:latest)
-#   -T, --target TARGET   Dockerfile target: snmpsim or snmptrapd (default: snmpsim)
+#   -T, --target TARGET   Dockerfile target: snmpsim, snmpsim-lite or snmptrapd
+#                         (default: snmpsim)
 #   -r, --registry REG    Registry prefix (e.g. myregistry.example.com/myorg)
 #   -n, --no-cache        Pass --no-cache to docker build
 #   -p, --push            Push image after successful build

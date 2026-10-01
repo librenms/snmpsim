@@ -15,10 +15,13 @@ jobs:
         include:
           - target: snmpsim
             flavor: ""
-          # the trap receiver is published as tags of the same image
+          # the trap receiver and lite responder are published as tags of the same image
           - target: snmptrapd
             flavor: |
               suffix=-snmptrapd,onlatest=true
+          - target: snmpsim-lite
+            flavor: |
+              suffix=-lite,onlatest=true
     uses: docker/github-builder/.github/workflows/build.yml@58cb9f5b71b1836d6f690c1e95effdeb9b98cb8a # v1.17.0
     permissions:
       contents: read

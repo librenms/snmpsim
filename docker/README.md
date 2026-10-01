@@ -1,17 +1,21 @@
 # SNMP Simulator
 
-The `Dockerfile` in the repository root builds two images from the snmpsim
+The `Dockerfile` in the repository root builds three images from the snmpsim
 sources in this repository:
 
 * `ghcr.io/jellyfrog/snmpsim` – snmpsim, listening on UDP port `1161`.
+* `ghcr.io/jellyfrog/snmpsim:<tag>-lite` – the lightweight, faster
+  SNMPv1/v2c-only responder, listening on UDP port `1161`.
 * `ghcr.io/jellyfrog/snmpsim:<tag>-snmptrapd` – a PySNMP-based trap/inform
   receiver inspired by `snmpreceiver/snmptrapd.py`, listening on UDP port `1162`.
-  It is published as `-snmptrapd` suffixed tags of the same image, and both
-  share the same base layers.
+
+The lite responder and the trap receiver are published as `-lite` and
+`-snmptrapd` suffixed tags of the same image, and all of them share the same
+base layers.
 
 Map the ports to the host ports you want (usually `161` and `162`).
 
-Both images are based on distroless and run as the non-root user `nonroot`
+All images are based on distroless and run as the non-root user `nonroot`
 (uid 65532). Mounted files must be readable by that user.
 
 By default the snmpsim image contains an snmpwalk from `demo.snmplabs.com` under community name `demo`.
@@ -43,13 +47,29 @@ To give snmpsim more flags, add them after the image name:
 The image always adds `--agent-udpv4-endpoint=0.0.0.0:1161`. To replace it,
 override the entrypoint with `--entrypoint /opt/venv/bin/snmpsim-command-responder`.
 
-To run the lightweight SNMPv1/v2c responder instead, override the entrypoint
-with `--entrypoint /opt/venv/bin/snmpsim-command-responder-lite` and pass
-`--agent-udpv4-endpoint=0.0.0.0:1161` yourself.
+### Lite responder
+
+The `-lite` tags run the lightweight SNMPv1/v2c responder. It takes the same
+data files and the same `SIGHUP` reload:
+
+    docker run -v /somewhere/with/snmpwalks:/usr/local/snmpsim/data \
+               -p 161:1161/udp \
+               ghcr.io/jellyfrog/snmpsim:master-lite
+
+It can answer requests from several processes. Set `SNMPSIM_WORKERS` (or give
+`--workers`) to a number, or to `auto` for one process per CPU the container may
+use. `auto` honours CPU limits such as `docker run --cpus=2`:
+
+    docker run --cpus=2 -e SNMPSIM_WORKERS=auto -p 161:1161/udp \
+               ghcr.io/jellyfrog/snmpsim:master-lite
+
+The default is one process. Each process keeps its own variation module state,
+so for example values SET through the `writecache` module are only seen by the
+process that handled the SET.
 
 ### Read-only root filesystem
 
-Both images support a read-only root filesystem. snmpsim writes its index cache
+All images support a read-only root filesystem. snmpsim writes its index cache
 to `/tmp`, so mount a writable `/tmp`:
 
     docker run --read-only --tmpfs /tmp -p 161:1161/udp \

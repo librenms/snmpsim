@@ -58,6 +58,21 @@ EXPOSE 1162/udp
 
 ENTRYPOINT ["/opt/venv/bin/python", "/opt/snmptrapd.py"]
 
+# ---- snmpsim-lite: the lightweight SNMPv1/v2c simulator ----
+FROM base AS snmpsim-lite
+
+LABEL description="Docker image for running the lightweight snmpsim SNMPv1/v2c responder"
+
+COPY docker/data /usr/local/snmpsim/data
+
+EXPOSE 1161/udp
+
+# As PID 1 an unhandled SIGTERM is ignored, see the snmpsim stage below.
+STOPSIGNAL SIGINT
+
+# Worker processes default to SNMPSIM_WORKERS, a number or "auto".
+ENTRYPOINT ["/opt/venv/bin/snmpsim-command-responder-lite", "--agent-udpv4-endpoint=0.0.0.0:1161"]
+
 # ---- snmpsim: the simulator (last, so it is the default build target) ----
 FROM base AS snmpsim
 
