@@ -8,3 +8,5 @@
 !docker/data
 !docker/snmptrapd.py
 **/__pycache__
+# sample data of the Python package, the image ships docker/data instead
+snmpsim/data
