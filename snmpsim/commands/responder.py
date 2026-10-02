@@ -856,6 +856,9 @@ configured automatically based on simulation data file paths relative to
         "udpv6": args.transport_id_offset,
     }
 
+    # (transport, endpoint) of every agent endpoint, for the bind check
+    agent_transports = []
+
     for opt in snmp_args:
         if opt[0] in ("--v3-engine-id", "end-of-options"):
             if snmp_engine:
@@ -1035,6 +1038,8 @@ configured automatically based on simulation data file paths relative to
                         snmp_engine, transport_domain, agent_udpv4_endpoint[0]
                     )
 
+                    agent_transports.append(agent_udpv4_endpoint)
+
                     log.msg(
                         "Listening at UDP/IPv4 endpoint %s, transport ID "
                         "%s"
@@ -1055,6 +1060,8 @@ configured automatically based on simulation data file paths relative to
                     config.add_transport(
                         snmp_engine, transport_domain, agent_udpv6_endpoint[0]
                     )
+
+                    agent_transports.append(agent_udpv6_endpoint)
 
                     log.msg(
                         "Listening at UDP/IPv6 endpoint %s, transport ID "
@@ -1206,6 +1213,18 @@ configured automatically based on simulation data file paths relative to
             # not running in the main thread
             pass
 
+    # transports bind once the event loop runs, wait for that so bind
+    # errors are not lost
+    for transport, endpoint in agent_transports:
+        try:
+            transport_dispatcher.loop.run_until_complete(transport._lport)
+
+        except OSError as exc:
+            raise SnmpsimError(f"Failed to bind UDP endpoint {endpoint}: {exc}")
+
+    # data indexed and all endpoints bound, let --daemonize return
+    daemon.notify_ready()
+
     with daemon.PrivilegesOf(args.process_user, args.process_group, final=True):
         try:
             transport_dispatcher.run_dispatcher(float(timeout))
@@ -1247,6 +1266,7 @@ if __name__ == "__main__":
 
     except Exception as exc:
         sys.stderr.write("process terminated: %s" % exc)
+        daemon.notify_failure(str(exc))
 
         for line in traceback.format_exception(*sys.exc_info()):
             sys.stderr.write(line.replace("\n", ";"))

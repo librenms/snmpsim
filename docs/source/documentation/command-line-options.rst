@@ -149,6 +149,12 @@ Unless *--daemonize* option is given, the daemon will remain an interactive
 process. With the *--daemonize* option, the daemon will detach itself from
 user terminal, close down standard I/O streams etc.
 
+The command returns only when the daemon is ready: the simulation data is
+indexed and all agent endpoints are bound. It then exits with code 0. If the
+daemon fails before it is ready, for example because a port is already in
+use, the command prints the error and exits with a non-zero code. The
+daemon keeps the current working directory, so relative paths work.
+
 **--process-user** & **--process-group**
 ++++++++++++++++++++++++++++++++++++++++
 

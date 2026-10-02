@@ -865,6 +865,9 @@ def main():
 
         open_server_socket(agent_udpv6_endpoint, transport_domain, ipv6=True)
 
+    # data indexed and all endpoints bound, let --daemonize return
+    daemon.notify_ready()
+
     def serve(loop, on_reload=reload_data_files):
         """Answer requests until interrupted or the loop is stopped"""
         variation.initialize_variation_modules(variation_modules, mode="variating")
@@ -1044,6 +1047,7 @@ if __name__ == "__main__":
 
     except Exception as exc:
         sys.stderr.write("process terminated: %s" % exc)
+        daemon.notify_failure(str(exc))
 
         for line in traceback.format_exception(*sys.exc_info()):
             sys.stderr.write(line.replace("\n", ";"))

@@ -13,6 +13,12 @@ if sys.platform[:3] == "win":
     def daemonize(pidfile):
         raise error.SnmpsimError("Windows is not inhabited with daemons!")
 
+    def notify_ready():
+        pass
+
+    def notify_failure(message):
+        pass
+
     class PrivilegesOf:
         """Context manager performing nothing on Windows"""
 
@@ -33,19 +39,92 @@ else:
     import signal
     import tempfile
 
+    # write end of the pipe the launching process waits on, until ready
+    _status_fd = None
+
+    def _notify(message):
+        global _status_fd
+
+        if _status_fd is None:
+            return
+
+        try:
+            os.write(_status_fd, ("%s\n" % message.replace("\n", " ")).encode())
+
+        except OSError:
+            pass
+
+        os.close(_status_fd)
+        _status_fd = None
+
+    def notify_ready():
+        """Let the launching process exit, the daemon is serving now"""
+        _notify("ready")
+
+    def notify_failure(message):
+        """Make the launching process fail with this message"""
+        _notify(message)
+
+    def _wait_ready(fd):
+        """Exit the launching process once the daemon is ready or failed"""
+        status = b""
+
+        while not status.endswith(b"\n"):
+            chunk = os.read(fd, 4096)
+
+            if not chunk:
+                break
+
+            status += chunk
+
+        status = status.decode(errors="replace").strip()
+
+        if status == "ready":
+            os._exit(0)
+
+        sys.stderr.write(
+            "ERROR: daemon failed to start: %s\r\n"
+            % (status or "exited without reporting its status")
+        )
+        sys.stderr.flush()
+        os._exit(1)
+
     def daemonize(pidfile):
+        global _status_fd
+
+        if pidfile:
+            pidfile = os.path.abspath(pidfile)
+
+        rfd, wfd = os.pipe()
+
         try:
             pid = os.fork()
             if pid > 0:
-                # exit first parent
-                os._exit(0)
+                # wait for the daemon, then exit first parent
+                os.close(wfd)
+                _wait_ready(rfd)
 
         except OSError as exc:
             raise error.SnmpsimError("ERROR: fork #1 failed: %s" % exc)
 
-        # decouple from parent environment
+        os.close(rfd)
+        _status_fd = wfd
+
+        # relay errors raised before the daemon is ready
+        excepthook = sys.excepthook
+
+        def excepthook_cb(exc_type, exc, tb):
+            notify_failure(str(exc) or exc_type.__name__)
+            excepthook(exc_type, exc, tb)
+
+        sys.excepthook = excepthook_cb
+
+        # not ready yet, e.g. an error logged and an exit code returned
+        atexit.register(_notify, "exited before it was ready, see the log for details")
+
+        # decouple from parent environment, but keep the working directory
+        # so relative paths given on the command line keep working
         try:
-            os.chdir("/")
             os.setsid()
 
         except OSError:
@@ -88,7 +167,9 @@ else:
                 os.rename(nm, pidfile)
 
         except Exception as exc:
-            raise error.SnmpsimError(f"Failed to create PID file {pidfile}: {exc}")
+            exc = error.SnmpsimError(f"Failed to create PID file {pidfile}: {exc}")
+            notify_failure(str(exc))
+            raise exc
 
         # redirect standard file descriptors
         sys.stdout.flush()
