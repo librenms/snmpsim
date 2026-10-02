@@ -1,4 +1,12 @@
-.. current-version: 1.2.2 (managed by bump2version)
+.. current-version: 2.0.0 (managed by bump2version)
+
+Revision 2.0.0, LibreNMS fork
+-----------------------------
+
+- Versioned separately from the upstream snmpsim on PyPI.
+- Added the snmpsim-command-responder-lite fast responder.
+- Published Docker images to ghcr.io/librenms/snmpsim.
+- Attached the wheel and sdist to a GitHub release on each version tag.
 
 Revision 1.2.2, released on Apr 26, 2026
 ----------------------------------------
