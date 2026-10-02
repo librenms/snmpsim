@@ -151,4 +151,11 @@ def test_daemonize_fails_when_port_in_use(tmp_path, daemon_cleanup):
 
     assert rc.returncode != 0
     assert b"Failed to bind UDP endpoint" in rc.stderr
-    assert read_pid(tmp_path) is None
+
+    # the failed daemon removes its pid file on the way out
+    deadline = time.monotonic() + 5
+
+    while (tmp_path / "snmpsim.pid").exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert not (tmp_path / "snmpsim.pid").exists()
