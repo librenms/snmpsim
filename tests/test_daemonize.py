@@ -43,12 +43,15 @@ def query(port, oid="1.3.6.1.2.1.1.1.0"):
     return p_mod.apiPDU.get_varbinds(p_mod.apiMessage.get_pdu(msg))
 
 
-def daemonize(tmp_path, port, data_dir=DATA_DIR, **kwargs):
+RESPONDERS = ["snmpsim.commands.responder_lite", "snmpsim.commands.responder"]
+
+
+def daemonize(tmp_path, port, data_dir=DATA_DIR, module=RESPONDERS[0], **kwargs):
     return subprocess.run(
         [
             sys.executable,
             "-m",
-            "snmpsim.commands.responder_lite",
+            module,
             f"--data-dir={data_dir}",
             f"--cache-dir={tmp_path / 'cache'}",
             f"--agent-udpv4-endpoint=127.0.0.1:{port}",
@@ -105,10 +108,11 @@ def daemon_cleanup(tmp_path):
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork()")
-def test_daemonize_returns_when_ready(tmp_path, daemon_cleanup):
+@pytest.mark.parametrize("module", RESPONDERS)
+def test_daemonize_returns_when_ready(tmp_path, daemon_cleanup, module):
     port = free_port()
 
-    rc = daemonize(tmp_path, port)
+    rc = daemonize(tmp_path, port, module=module)
 
     assert rc.returncode == 0, rc.stderr.decode()
 
@@ -142,12 +146,13 @@ def test_daemonize_relative_data_dir(tmp_path, daemon_cleanup):
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork()")
-def test_daemonize_fails_when_port_in_use(tmp_path, daemon_cleanup):
+@pytest.mark.parametrize("module", RESPONDERS)
+def test_daemonize_fails_when_port_in_use(tmp_path, daemon_cleanup, module):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
 
-        rc = daemonize(tmp_path, port)
+        rc = daemonize(tmp_path, port, module=module)
 
     assert rc.returncode != 0
     assert b"Failed to bind UDP endpoint" in rc.stderr

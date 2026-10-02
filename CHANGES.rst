@@ -8,6 +8,8 @@ Revision 2.0.1, LibreNMS fork
 - Made --daemonize keep the working directory, so relative paths such as
   --data-dir work.
 - Made snmpsim-command-responder fail when it cannot bind an agent endpoint.
+- Fixed --daemonize on Python 3.14, where the daemon lost its event loop
+  and exited right after it started.
 
 Revision 2.0.0, LibreNMS fork
 -----------------------------

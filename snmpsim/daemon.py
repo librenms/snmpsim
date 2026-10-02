@@ -32,6 +32,7 @@ if sys.platform[:3] == "win":
             pass
 
 else:
+    import asyncio
     import os
     import pwd
     import grp
@@ -95,6 +96,14 @@ else:
         if pidfile:
             pidfile = os.path.abspath(pidfile)
 
+        # forked children lose the current event loop (Python 3.12+), but
+        # objects set up before daemonizing are bound to it
+        try:
+            loop = asyncio.get_event_loop()
+
+        except RuntimeError:
+            loop = None
+
         rfd, wfd = os.pipe()
 
         try:
@@ -141,6 +150,9 @@ else:
 
         except OSError as exc:
             raise error.SnmpsimError("ERROR: fork #2 failed: %s" % exc)
+
+        if loop is not None:
+            asyncio.set_event_loop(loop)
 
         def signal_cb(s, f):
             raise KeyboardInterrupt
