@@ -1,4 +1,13 @@
-.. current-version: 2.0.0 (managed by bump2version)
+.. current-version: 2.0.1 (managed by bump2version)
+
+Revision 2.0.1, LibreNMS fork
+-----------------------------
+
+- Made --daemonize return only when the simulator is ready, or exit
+  non-zero with the error when the daemon fails to start.
+- Made --daemonize keep the working directory, so relative paths such as
+  --data-dir work.
+- Made snmpsim-command-responder fail when it cannot bind an agent endpoint.
 
 Revision 2.0.0, LibreNMS fork
 -----------------------------
