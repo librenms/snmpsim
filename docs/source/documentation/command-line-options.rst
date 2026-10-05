@@ -426,7 +426,7 @@ With *--log-level=info*, the quirk used for a response is logged.
 | generr-for-missing     | no    | GET with a missing OID fails with genErr      |
 +------------------------+-------+-----------------------------------------------+
 | nosuchname-fails-pdu   | no    | SNMPv2c GET with a missing OID fails with     |
-|                        |       | noSuchName, as SNMPv1 agents do               |
+|                        |       | noSuchName, as in SNMPv1                      |
 +------------------------+-------+-----------------------------------------------+
 | jump-at-end            | yes   | past the end of the MIB, answer with an OID   |
 |                        |       | not in the data file                          |
@@ -442,15 +442,16 @@ With *--log-level=info*, the quirk used for a response is logged.
 | unordered              | no    | neighbouring table rows are walked in swapped |
 |                        |       | order, OIDs are not increasing                |
 +------------------------+-------+-----------------------------------------------+
-| bulk-short             | yes   | GETBULK answers one repetition only           |
+| bulk-short             | yes   | GETBULK ignores max-repetitions and answers   |
+|                        |       | one repetition                                |
 +------------------------+-------+-----------------------------------------------+
 | bulk-overrun           | yes   | GETBULK answers twice the repetitions         |
 +------------------------+-------+-----------------------------------------------+
 | toobig                 | no    | GETBULK asking for more than 10 var-binds     |
 |                        |       | fails with tooBig                             |
 +------------------------+-------+-----------------------------------------------+
-| hang-after-bulk        | no    | no answers for 3 seconds after a GETBULK      |
-|                        |       | asking for more than 10 var-binds             |
+| hang-after-bulk        | no    | agent stops answering for 3 seconds after a   |
+|                        |       | GETBULK asking for more than 10 var-binds     |
 +------------------------+-------+-----------------------------------------------+
 | max-oid                | no    | GET and GETNEXT with more than 5 OIDs fail    |
 |                        |       | with tooBig                                   |
@@ -463,7 +464,7 @@ With *--log-level=info*, the quirk used for a response is logged.
 +------------------------+-------+-----------------------------------------------+
 | trailing-nul           | yes   | a text value ends with a NUL byte             |
 +------------------------+-------+-----------------------------------------------+
-| non-utf8               | yes   | a text value ends with non UTF-8 bytes        |
+| non-utf8               | yes   | a text value ends with non UTF-8 (GBK) bytes  |
 +------------------------+-------+-----------------------------------------------+
 | drop-first             | yes   | first transmission of the request is not      |
 |                        |       | answered                                      |
@@ -482,10 +483,8 @@ Walking with *-Cc* turns off the loop detection of net-snmp, so with
 *--chaos-rate=1* and *repeat-at-end* or *unordered* enabled alone, such a
 walk never ends. Real agents behaving like this cause the same problem.
 
-Quirks changing the encoded response, like *duplicate* or *long-lengths*,
-only apply to the GET, GETNEXT and GETBULK requests the responder decodes
-without pysnmp, which is nearly all of them. Each worker process keeps
-its own state for *drop-first* and *hang-after-bulk*.
+Quirks only apply to GET, GETNEXT and GETBULK requests. Each worker
+process keeps its own state for *drop-first* and *hang-after-bulk*.
 
 **--chaos-rate**
 ++++++++++++++++

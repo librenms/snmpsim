@@ -11,7 +11,13 @@ import pytest
 
 from snmpsim import chaos
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "chaos")
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DATA_DIR = os.path.join(TESTS_DIR, "data", "chaos")
+
+DOCS = os.path.join(
+    TESTS_DIR, "..", "docs", "source", "documentation", "command-line-options.rst"
+)
 
 NET_SNMP = all(shutil.which(tool) for tool in ("snmpget", "snmpwalk", "snmpbulkwalk"))
 
@@ -152,13 +158,42 @@ def test_presets_cover_quirks():
     assert chaos.PRESETS["all"] == list(chaos.QUIRKS)
 
 
+def test_docs_list_quirks():
+    with open(DOCS) as f:
+        text = f.read()
+
+    section = text[text.index("**--chaos**") : text.index("**--chaos-rate**")]
+    rows = re.findall(r"^\| (\S*) +\| (\S*) +\| (.*?) *\|$", section, re.M)
+
+    documented = {}
+    name = None
+
+    for first, safe, text in rows:
+        if first:
+            name = first
+            documented[name] = [safe, text]
+
+        elif text:
+            documented[name][1] += " " + text
+
+    del documented["Quirk"]
+
+    assert documented == {
+        name: ["yes" if safe else "no", description]
+        for name, (_, _, safe, description) in chaos.QUIRKS.items()
+    }
+
+
 @pytest.mark.skipif(not NET_SNMP, reason="needs net-snmp command line tools")
 @pytest.mark.parametrize("quirk", chaos.PRESETS["safe"])
 def test_safe_quirk_survived_by_net_snmp(quirk, cache_dir, tmp_path, baseline):
     log_path = tmp_path / "responder.log"
 
+    # every first transmission is dropped, retry quickly
+    flags = ("-t", "0.1") if quirk == "drop-first" else ()
+
     with responder(cache_dir, log_path, f"--chaos={quirk}", "--chaos-rate=1") as port:
-        results = {scenario: run(port, scenario) for scenario in SCENARIOS}
+        results = {scenario: run(port, scenario, *flags) for scenario in SCENARIOS}
 
     for scenario, (returncode, stdout, stderr) in results.items():
         assert returncode == baseline[scenario][0], (scenario, stdout, stderr)

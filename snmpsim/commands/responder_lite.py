@@ -264,7 +264,7 @@ def main():
     parser.add_argument(
         "--chaos-rate",
         type=float,
-        default=0.1,
+        default=chaos.DEFAULT_RATE,
         metavar="<0..1>",
         help="Share of requests answered with a quirk in chaos mode",
     )
@@ -543,8 +543,9 @@ def main():
     ):
         """Run request against the selected data file.
 
-        Returns (error_status, error_index, var_binds) of the response or
-        None when no response should be sent.
+        Returns (error_status, error_index, var_binds, wire_quirk) of the
+        response or None when no response should be sent. The wire_quirk
+        is the chaos mode quirk to play when sending the response, if any.
         """
         candidate = select_context(
             tuple(transport_domain), transport_address[0], community_name
@@ -580,9 +581,11 @@ def main():
 
         mib_instrum = contexts[candidate]
 
+        # chaos for reading simulation data only, not for the index
         quirky = (
             chaos_mode is not None
-            and type(mib_instrum) is controller.MibInstrumController
+            and pdu_type != SET_REQUEST
+            and not isinstance(mib_instrum, controller.DataIndexInstrumController)
         )
 
         if pdu_type == fastber.GET_REQUEST:
@@ -624,8 +627,10 @@ def main():
             log.error("Ignoring SNMP engine failure: %s" % exc)
             return
 
+        wire_quirk = None
+
         if quirky:
-            error_status, error_index, var_binds = chaos_mode.apply(
+            error_status, error_index, var_binds, wire_quirk = chaos_mode.apply(
                 community_name,
                 pdu_type,
                 req_var_binds,
@@ -636,22 +641,26 @@ def main():
             )
 
             if error_status:
-                return error_status, error_index, var_binds
+                return error_status, error_index, var_binds, wire_quirk
 
         if not msg_ver:
             for idx, (oid, val) in enumerate(var_binds):
                 if val.tagSet in SNMP_2TO1_ERROR_MAP:
-                    return SNMP_2TO1_ERROR_MAP[val.tagSet], idx + 1, req_var_binds
+                    return (
+                        SNMP_2TO1_ERROR_MAP[val.tagSet],
+                        idx + 1,
+                        req_var_binds,
+                        wire_quirk,
+                    )
 
-        return 0, 0, var_binds
+        return 0, 0, var_binds, wire_quirk
 
     def fast_command_responder(transport_domain, transport_address, whole_msg):
         """Handle common requests without pyasn1 message (de)serialization.
 
-        Returns the encoded response, None if no response should be sent
-        or raises fastber.Unsupported if the message is not handled. In
-        chaos mode, a list of (delay, encoded response) pairs is returned
-        instead of the encoded response.
+        Returns the encoded response and the chaos mode quirk to play when
+        sending it, None if no response should be sent or raises
+        fastber.Unsupported if the message is not handled.
         """
         (
             msg_ver,
@@ -679,20 +688,8 @@ def main():
         if response is None:
             return
 
-        error_status, error_index, var_binds = response
+        error_status, error_index, var_binds, wire_quirk = response
 
-        rsp = encode_response(
-            msg_ver, community_name, request_id, error_status, error_index, var_binds
-        )
-
-        if chaos_mode is None:
-            return rsp
-
-        return chaos_mode.wire(transport_address, request_id, rsp)
-
-    def encode_response(
-        msg_ver, community_name, request_id, error_status, error_index, var_binds
-    ):
         try:
             return fastber.encode_response(
                 msg_ver,
@@ -701,7 +698,7 @@ def main():
                 error_status,
                 error_index,
                 var_binds,
-            )
+            ), wire_quirk
 
         except Exception:
             # unusual response contents, let pysnmp encode it
@@ -721,25 +718,27 @@ def main():
 
             p_mod.apiMessage.set_pdu(rsp_msg, rsp_pdu)
 
-            return encoder.encode(rsp_msg)
+            return encoder.encode(rsp_msg), wire_quirk
 
     def handle_message(send, transport_domain, transport_address, whole_msg):
         """v2c arch command responder request handling"""
         try:
-            rsp = fast_command_responder(transport_domain, transport_address, whole_msg)
+            response = fast_command_responder(
+                transport_domain, transport_address, whole_msg
+            )
 
         except fastber.Unsupported:
             pass
 
         else:
-            if rsp is None:
-                pass
+            if response is not None:
+                rsp, wire_quirk = response
 
-            elif chaos_mode is None:
-                send(rsp)
+                if wire_quirk is None:
+                    send(rsp)
 
-            else:
-                chaos.send_packets(send, rsp)
+                else:
+                    chaos_mode.send(send, wire_quirk, transport_address, rsp)
 
             return
 
@@ -797,14 +796,10 @@ def main():
                 transport_address,
             )
 
-            if chaos_mode is not None:
-                # wire quirks are only played by the fast path
-                chaos_mode.wire_quirk = None
-
             if response is None:
                 return whole_msg
 
-            error_status, error_index, var_binds = response
+            error_status, error_index, var_binds, wire_quirk = response
 
             rsp_msg = p_mod.apiMessage.get_response(req_msg)
             rsp_pdu = p_mod.apiMessage.get_pdu(rsp_msg)
@@ -815,7 +810,13 @@ def main():
 
             p_mod.apiPDU.set_varbinds(rsp_pdu, var_binds)
 
-            send(encoder.encode(rsp_msg))
+            if wire_quirk is None:
+                send(encoder.encode(rsp_msg))
+
+            else:
+                chaos_mode.send(
+                    send, wire_quirk, transport_address, encoder.encode(rsp_msg)
+                )
 
         return whole_msg
 

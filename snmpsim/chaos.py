@@ -28,159 +28,184 @@ HANG_SECONDS = 3
 MAX_OIDS = 5
 DELAY_SECONDS = 1.5
 
-# quirk name -> (situation, safe, description)
+# quirk name -> (kind, situations it applies to, safe, description)
+#
+# A kind of quirks is picked first, then a quirk of that kind applying to
+# one of the situations of the request: "missing" (GET of OIDs not in the
+# data file), "end" (GETNEXT or GETBULK past its end), "next" (GETNEXT or
+# GETBULK), "bulk", "big-bulk" (GETBULK asking for more than BULK_LIMIT
+# var-binds), "many-oids" (more than MAX_OIDS), "integer", "unsigned" and
+# "text" (values of these types) and "wire" (any response).
 #
 # Safe quirks are survived by net-snmp tools run with default flags, the
 # others need per-device settings in the SNMP manager (e.g. walking with
 # -Cc, disabling GETBULK, fewer max-repetitions or OIDs per request).
 QUIRKS = {
     "get-as-next": (
-        "missing",
+        "exception",
+        frozenset(("missing",)),
         True,
         "GET of a missing OID answers with the next existing OID",
     ),
     "null-for-missing": (
-        "missing",
+        "exception",
+        frozenset(("missing",)),
         True,
         "GET of a missing OID answers with a NULL value",
     ),
     "drop-missing": (
-        "missing",
+        "exception",
+        frozenset(("missing",)),
         True,
         "GET response leaves out missing OIDs",
     ),
     "swap-exceptions": (
-        "missing-or-end",
+        "exception",
+        frozenset(("missing", "end")),
         True,
         "endOfMibView for missing OIDs, noSuchObject past the end of the MIB",
     ),
     "generr-for-missing": (
-        "missing",
+        "exception",
+        frozenset(("missing",)),
         False,
         "GET with a missing OID fails with genErr",
     ),
     "nosuchname-fails-pdu": (
-        "missing",
+        "exception",
+        frozenset(("missing",)),
         False,
         "SNMPv2c GET with a missing OID fails with noSuchName, as in SNMPv1",
     ),
     "jump-at-end": (
-        "end",
+        "exception",
+        frozenset(("end",)),
         True,
         "past the end of the MIB, answer with an OID not in the data file",
     ),
     "end-as-nosuchname": (
-        "end",
+        "exception",
+        frozenset(("end",)),
         True,
         "past the end of the MIB, fail with noSuchName instead of endOfMibView",
     ),
     "wrap-at-end": (
-        "end",
+        "exception",
+        frozenset(("end",)),
         False,
         "past the end of the MIB, continue from the first OID",
     ),
     "repeat-at-end": (
-        "end",
+        "exception",
+        frozenset(("end",)),
         False,
         "past the end of the MIB, repeat the last OID",
     ),
     "unordered": (
-        "next",
+        "order",
+        frozenset(("next",)),
         False,
         "neighbouring table rows are walked in swapped order, OIDs are not increasing",
     ),
     "bulk-short": (
         "bulk",
+        frozenset(("bulk",)),
         True,
         "GETBULK ignores max-repetitions and answers one repetition",
     ),
     "bulk-overrun": (
         "bulk",
+        frozenset(("bulk",)),
         True,
         "GETBULK answers twice the repetitions",
     ),
     "toobig": (
-        "big-bulk",
+        "bulk",
+        frozenset(("big-bulk",)),
         False,
         f"GETBULK asking for more than {BULK_LIMIT} var-binds fails with tooBig",
     ),
     "hang-after-bulk": (
-        "big-bulk",
+        "bulk",
+        frozenset(("big-bulk",)),
         False,
         f"agent stops answering for {HANG_SECONDS} seconds after a GETBULK "
         f"asking for more than {BULK_LIMIT} var-binds",
     ),
     "max-oid": (
-        "many-oids",
+        "size",
+        frozenset(("many-oids",)),
         False,
         f"GET and GETNEXT with more than {MAX_OIDS} OIDs fail with tooBig",
     ),
     "wrong-type": (
         "value",
+        frozenset(("integer",)),
         True,
         "an integer value is sent with another integer type",
     ),
     "signed-unsigned": (
         "value",
+        frozenset(("unsigned",)),
         True,
         "a large unsigned value is encoded as a negative number",
     ),
     "trailing-nul": (
         "value",
+        frozenset(("text",)),
         True,
         "a text value ends with a NUL byte",
     ),
     "non-utf8": (
         "value",
+        frozenset(("text",)),
         True,
         "a text value ends with non UTF-8 (GBK) bytes",
     ),
     "drop-first": (
         "wire",
+        frozenset(("wire",)),
         True,
         "first transmission of the request is not answered",
     ),
     "duplicate": (
         "wire",
+        frozenset(("wire",)),
         True,
         "response is sent twice",
     ),
     "stale-response": (
         "wire",
+        frozenset(("wire",)),
         True,
         "response is preceded by one with another request ID",
     ),
     "long-lengths": (
         "wire",
+        frozenset(("wire",)),
         True,
         "BER lengths use the long form",
     ),
     "delay": (
         "wire",
+        frozenset(("wire",)),
         False,
         f"response is sent after {DELAY_SECONDS} seconds",
     ),
 }
 
 PRESETS = {
-    "safe": [name for name, (_, safe, _) in QUIRKS.items() if safe],
+    "safe": [name for name, (_, _, safe, _) in QUIRKS.items() if safe],
     "all": list(QUIRKS),
 }
 
 DEFAULT_PRESET = "safe"
 
+DEFAULT_RATE = 0.1
+
 TOO_BIG = 1
 NO_SUCH_NAME = 2
 GEN_ERR = 5
-
-# situation -> kind of quirks
-_KINDS = {
-    "missing": "exception",
-    "end": "exception",
-    "missing-or-end": "exception",
-    "big-bulk": "bulk",
-    "many-oids": "bulk",
-}
 
 _NULL = univ.Null("")
 
@@ -199,12 +224,14 @@ _WRONG_TYPES = {
     rfc1902.TimeTicks.tagSet: rfc1902.Gauge32,
 }
 
-# Counter32, Gauge32, TimeTicks, Counter64 -> BER tag
-_UNSIGNED_TAGS = {
-    rfc1902.Counter32.tagSet: 0x41,
-    rfc1902.Gauge32.tagSet: 0x42,
-    rfc1902.TimeTicks.tagSet: 0x43,
-    rfc1902.Counter64.tagSet: 0x46,
+# BER value tag -> situation of the value quirks
+_VALUE_SITUATIONS = {
+    0x02: ("integer",),  # Integer32
+    0x04: ("text",),  # OctetString
+    0x41: ("integer", "unsigned"),  # Counter32
+    0x42: ("integer", "unsigned"),  # Gauge32
+    0x43: ("integer", "unsigned"),  # TimeTicks
+    0x46: ("integer", "unsigned"),  # Counter64
 }
 
 # usmStatsUnsupportedSecLevels.0, net-snmp agents answer it past mib-2
@@ -213,8 +240,8 @@ _JUMP_OID = univ.ObjectIdentifier("1.3.6.1.6.3.15.1.1.1.0")
 # a Huawei agent's entPhysicalDescr suffix, LibreNMS issue #20361
 _NON_UTF8 = b" \xb7\xe7\xbb\xfa"
 
-# constructed types in a response message: SEQUENCE, GetResponse PDU
-_CONSTRUCTED = frozenset((0x30, fastber.GET_RESPONSE))
+# constructed types in a response message
+_CONSTRUCTED = frozenset((fastber._SEQUENCE, fastber.GET_RESPONSE))
 
 # remembered requests for drop-first
 _MAX_SEEN = 4096
@@ -265,10 +292,22 @@ def _is_exception(var_bind):
 
 
 def _is_end(var_bind):
-    return (
-        type(var_bind) is not fastber.EncodedVarBind
-        and var_bind[1].tagSet == _END_OF_MIB
-    )
+    return _is_exception(var_bind) and var_bind[1].tagSet == _END_OF_MIB
+
+
+def _value_tag(var_bind):
+    """BER tag of a var-bind value, without evaluating encoded ones"""
+    if type(var_bind) is fastber.EncodedVarBind:
+        encoded = var_bind.encoded
+        _, start, _ = fastber._header(encoded, 0)
+        _, _, end = fastber._header(encoded, start)
+        return encoded[end]
+
+    tag_set = var_bind[1].tagSet
+
+    if len(tag_set) == 1:
+        tag = tag_set[0]
+        return tag.tagClass | tag.tagFormat | tag.tagId
 
 
 def _is_text(octets):
@@ -294,16 +333,18 @@ def _mangle(quirk, var_bind):
             return oid, rfc1902.Counter32(int(value))
 
     elif quirk == "signed-unsigned":
-        tag = _UNSIGNED_TAGS.get(tag_set)
-        number = int(value) if tag else 0
+        number = int(value)
 
         # values with the top bit set need a leading zero octet, leave it out
         if number and number.bit_length() % 8 == 0:
             encoded = fastber._encode_tlv(
-                0x30,
-                fastber._encode_tlv(0x06, fastber._encode_oid(tuple(oid)))
+                fastber._SEQUENCE,
+                fastber._encode_tlv(
+                    fastber._OBJECT_IDENTIFIER, fastber._encode_oid(tuple(oid))
+                )
                 + fastber._encode_tlv(
-                    tag, number.to_bytes(number.bit_length() // 8, "big")
+                    _value_tag(var_bind),
+                    number.to_bytes(number.bit_length() // 8, "big"),
                 ),
             )
 
@@ -357,12 +398,9 @@ def _build_tlvs(items, long_lengths=False):
 class Chaos:
     """Make responses misbehave like buggy SNMP agents do"""
 
-    def __init__(self, quirks, rate=0.1):
+    def __init__(self, quirks, rate=DEFAULT_RATE):
         self.quirks = list(quirks)
         self.rate = rate
-
-        # wire quirk picked for the response being encoded
-        self.wire_quirk = None
 
         self._hung_until = 0
         self._seen = collections.OrderedDict()
@@ -396,14 +434,13 @@ class Chaos:
         var_binds,
         mib_instrum,
     ):
-        """Maybe mangle a response.
+        """Maybe mangle a response to a GET, GETNEXT or GETBULK request.
 
-        Returns an (error_status, error_index, var_binds) response.
+        Returns an (error_status, error_index, var_binds, wire_quirk)
+        response, wire_quirk is to be played by `send` when not None.
         """
-        self.wire_quirk = None
-
         if random.random() >= self.rate:
-            return 0, 0, var_binds
+            return 0, 0, var_binds, None
 
         if pdu_type == fastber.GET_BULK_REQUEST:
             n = min(int(non_repeaters), len(req_var_binds))
@@ -416,16 +453,24 @@ class Chaos:
             size = len(req_var_binds)
 
         situations = {"wire"}
+        values = collections.defaultdict(list)
 
-        if pdu_type == fastber.GET_REQUEST:
-            if any(_is_exception(var_bind) for var_bind in var_binds):
-                situations.update(("missing", "missing-or-end"))
+        for idx, var_bind in enumerate(var_binds):
+            if _is_exception(var_bind):
+                if pdu_type == fastber.GET_REQUEST:
+                    situations.add("missing")
 
-        else:
+                elif _is_end(var_bind):
+                    situations.add("end")
+
+            else:
+                for situation in _VALUE_SITUATIONS.get(_value_tag(var_bind), ()):
+                    values[situation].append(idx)
+
+        situations.update(values)
+
+        if pdu_type != fastber.GET_REQUEST:
             situations.add("next")
-
-            if any(_is_end(var_bind) for var_bind in var_binds):
-                situations.update(("end", "missing-or-end"))
 
         if r:
             situations.add("bulk")
@@ -436,63 +481,62 @@ class Chaos:
         elif size > MAX_OIDS:
             situations.add("many-oids")
 
-        candidates = [name for name in self.quirks if QUIRKS[name][0] in situations]
-
-        values = {}
-
-        for name in self.quirks:
-            if QUIRKS[name][0] == "value":
-                values[name] = [
-                    idx
-                    for idx, var_bind in enumerate(var_binds)
-                    if _mangle(name, var_bind) is not None
-                ]
-
-                if values[name]:
-                    candidates.append(name)
-
-        if not candidates:
-            return 0, 0, var_binds
-
         kinds = collections.defaultdict(list)
 
-        for name in candidates:
-            situation = QUIRKS[name][0]
-            kinds[_KINDS.get(situation, situation)].append(name)
+        for name in self.quirks:
+            kind, quirk_situations, _, _ = QUIRKS[name]
 
-        quirk = random.choice(random.choice(list(kinds.values())))
-        situation = QUIRKS[quirk][0]
+            if quirk_situations & situations:
+                kinds[kind].append(name)
 
-        self._fired(community, quirk)
+        if not kinds:
+            return 0, 0, var_binds, None
+
+        kind = random.choice(list(kinds))
+        quirk = random.choice(kinds[kind])
 
         var_binds = list(var_binds)
 
-        if situation == "wire":
-            self.wire_quirk = quirk
+        if kind == "value":
+            (situation,) = QUIRKS[quirk][1]
+            candidates = values[situation]
+            random.shuffle(candidates)
 
-        elif situation == "value":
-            idx = random.choice(values[quirk])
-            var_binds[idx] = _mangle(quirk, var_binds[idx])
+            # e.g. not all octet strings are text
+            for idx in candidates:
+                mangled = _mangle(quirk, var_binds[idx])
 
-        elif quirk in ("max-oid", "toobig"):
-            return TOO_BIG, 0, []
+                if mangled is not None:
+                    self._fired(community, quirk)
+                    var_binds[idx] = mangled
+                    break
 
-        elif quirk == "hang-after-bulk":
+            return 0, 0, var_binds, None
+
+        self._fired(community, quirk)
+
+        if kind == "wire":
+            return 0, 0, var_binds, quirk
+
+        if quirk in ("max-oid", "toobig"):
+            return TOO_BIG, 0, [], None
+
+        if quirk == "hang-after-bulk":
             self._hung_until = time.monotonic() + HANG_SECONDS
 
-        elif quirk == "unordered":
+        elif kind == "order":
             var_binds = self._unordered(req_var_binds, n, r, var_binds, mib_instrum)
 
-        elif situation == "bulk":
+        elif kind == "bulk":
             var_binds = self._bulk(quirk, var_binds, n, r, mib_instrum)
 
         elif pdu_type == fastber.GET_REQUEST:
-            return self._missing(quirk, req_var_binds, var_binds, mib_instrum)
+            return *self._missing(quirk, req_var_binds, var_binds, mib_instrum), None
 
         else:
-            return self._end(quirk, req_var_binds, var_binds, n, r, mib_instrum)
+            return *self._end(quirk, req_var_binds, var_binds, n, r, mib_instrum), None
 
-        return 0, 0, var_binds
+        return 0, 0, var_binds, None
 
     @staticmethod
     def _missing(quirk, req_var_binds, var_binds, mib_instrum):
@@ -677,13 +721,11 @@ class Chaos:
 
         return next_var_bind
 
-    def wire(self, transport_address, request_id, packet):
-        """Packets to send for a response as a list of (delay, packet)"""
-        quirk = self.wire_quirk
-        self.wire_quirk = None
-
+    def send(self, send, quirk, transport_address, packet):
+        """Send a response, playing a wire quirk if not None"""
         if quirk == "drop-first":
-            seen = (transport_address, request_id)
+            message = _parse_tlvs(packet)
+            seen = (transport_address, message[0][1][2][1][0][1])
 
             if seen not in self._seen:
                 self._seen[seen] = True
@@ -691,32 +733,25 @@ class Chaos:
                 if len(self._seen) > _MAX_SEEN:
                     self._seen.popitem(last=False)
 
-                return []
+                return
 
         elif quirk == "duplicate":
-            return [(0, packet), (0, packet)]
+            send(packet)
 
         elif quirk == "stale-response":
             message = _parse_tlvs(packet)
-            pdu = message[0][1][2][1]
-            pdu[0][1] = fastber._encode_integer((request_id + 2**30) % 2**31)
+            request_id = message[0][1][2][1][0]
+            request_id[1] = fastber._encode_integer(
+                (int.from_bytes(request_id[1], "big", signed=True) + 2**30) % 2**31
+            )
 
-            return [(0, _build_tlvs(message)), (0, packet)]
+            send(_build_tlvs(message))
 
         elif quirk == "long-lengths":
-            return [(0, _build_tlvs(_parse_tlvs(packet), long_lengths=True))]
+            packet = _build_tlvs(_parse_tlvs(packet), long_lengths=True)
 
         elif quirk == "delay":
-            return [(DELAY_SECONDS, packet)]
+            asyncio.get_running_loop().call_later(DELAY_SECONDS, send, packet)
+            return
 
-        return [(0, packet)]
-
-
-def send_packets(send, packets):
-    """Send (delay, packet) pairs, the delayed ones from the event loop"""
-    for delay, packet in packets:
-        if delay:
-            asyncio.get_running_loop().call_later(delay, send, packet)
-
-        else:
-            send(packet)
+        send(packet)
