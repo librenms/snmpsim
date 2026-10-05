@@ -381,6 +381,118 @@ by the process that happened to handle the *SET* request.
 
 Not available on Windows. The default is *1*.
 
+**--chaos**
++++++++++++
+
+Misbehave like buggy SNMP agents do, to test that SNMP managers cope with
+them. A share of the requests, set by *--chaos-rate*, is answered with
+one of the enabled quirks that apply to the request, picked at random.
+
+The option takes a comma separated list of presets and quirk names, a
+name prefixed with *-* is left out. Without a value, the *safe* preset is
+used.
+
+* *safe* - the quirks net-snmp command line tools cope with when run
+  with their default flags. Managers should cope with these without
+  per-device settings.
+* *all* - all quirks, including those calling for per-device settings
+  in the manager, like walking with *-Cc*, fewer max-repetitions, fewer
+  OIDs per request or not using GETBULK at all.
+
+.. code-block:: bash
+
+   $ snmpsim-command-responder-lite --chaos \
+       --agent-udpv4-endpoint=127.0.0.1:1161
+
+   $ snmpsim-command-responder-lite --chaos=safe,unordered,-duplicate \
+       --chaos-rate=0.5 --agent-udpv4-endpoint=127.0.0.1:1161
+
+With *--log-level=info*, the quirk used for a response is logged.
+
++------------------------+-------+-----------------------------------------------+
+| Quirk                  | safe  | Behaviour                                     |
++========================+=======+===============================================+
+| get-as-next            | yes   | GET of a missing OID answers with the next    |
+|                        |       | existing OID                                  |
++------------------------+-------+-----------------------------------------------+
+| null-for-missing       | yes   | GET of a missing OID answers with a NULL      |
+|                        |       | value                                         |
++------------------------+-------+-----------------------------------------------+
+| drop-missing           | yes   | GET response leaves out missing OIDs          |
++------------------------+-------+-----------------------------------------------+
+| swap-exceptions        | yes   | endOfMibView for missing OIDs, noSuchObject   |
+|                        |       | past the end of the MIB                       |
++------------------------+-------+-----------------------------------------------+
+| generr-for-missing     | no    | GET with a missing OID fails with genErr      |
++------------------------+-------+-----------------------------------------------+
+| nosuchname-fails-pdu   | no    | SNMPv2c GET with a missing OID fails with     |
+|                        |       | noSuchName, as SNMPv1 agents do               |
++------------------------+-------+-----------------------------------------------+
+| jump-at-end            | yes   | past the end of the MIB, answer with an OID   |
+|                        |       | not in the data file                          |
++------------------------+-------+-----------------------------------------------+
+| end-as-nosuchname      | yes   | past the end of the MIB, fail with noSuchName |
+|                        |       | instead of endOfMibView                       |
++------------------------+-------+-----------------------------------------------+
+| wrap-at-end            | no    | past the end of the MIB, continue from the    |
+|                        |       | first OID                                     |
++------------------------+-------+-----------------------------------------------+
+| repeat-at-end          | no    | past the end of the MIB, repeat the last OID  |
++------------------------+-------+-----------------------------------------------+
+| unordered              | no    | neighbouring table rows are walked in swapped |
+|                        |       | order, OIDs are not increasing                |
++------------------------+-------+-----------------------------------------------+
+| bulk-short             | yes   | GETBULK answers one repetition only           |
++------------------------+-------+-----------------------------------------------+
+| bulk-overrun           | yes   | GETBULK answers twice the repetitions         |
++------------------------+-------+-----------------------------------------------+
+| toobig                 | no    | GETBULK asking for more than 10 var-binds     |
+|                        |       | fails with tooBig                             |
++------------------------+-------+-----------------------------------------------+
+| hang-after-bulk        | no    | no answers for 3 seconds after a GETBULK      |
+|                        |       | asking for more than 10 var-binds             |
++------------------------+-------+-----------------------------------------------+
+| max-oid                | no    | GET and GETNEXT with more than 5 OIDs fail    |
+|                        |       | with tooBig                                   |
++------------------------+-------+-----------------------------------------------+
+| wrong-type             | yes   | an integer value is sent with another integer |
+|                        |       | type                                          |
++------------------------+-------+-----------------------------------------------+
+| signed-unsigned        | yes   | a large unsigned value is encoded as a        |
+|                        |       | negative number                               |
++------------------------+-------+-----------------------------------------------+
+| trailing-nul           | yes   | a text value ends with a NUL byte             |
++------------------------+-------+-----------------------------------------------+
+| non-utf8               | yes   | a text value ends with non UTF-8 bytes        |
++------------------------+-------+-----------------------------------------------+
+| drop-first             | yes   | first transmission of the request is not      |
+|                        |       | answered                                      |
++------------------------+-------+-----------------------------------------------+
+| duplicate              | yes   | response is sent twice                        |
++------------------------+-------+-----------------------------------------------+
+| stale-response         | yes   | response is preceded by one with another      |
+|                        |       | request ID                                    |
++------------------------+-------+-----------------------------------------------+
+| long-lengths           | yes   | BER lengths use the long form                 |
++------------------------+-------+-----------------------------------------------+
+| delay                  | no    | response is sent after 1.5 seconds            |
++------------------------+-------+-----------------------------------------------+
+
+Walking with *-Cc* turns off the loop detection of net-snmp, so with
+*--chaos-rate=1* and *repeat-at-end* or *unordered* enabled alone, such a
+walk never ends. Real agents behaving like this cause the same problem.
+
+Quirks changing the encoded response, like *duplicate* or *long-lengths*,
+only apply to the GET, GETNEXT and GETBULK requests the responder decodes
+without pysnmp, which is nearly all of them. Each worker process keeps
+its own state for *drop-first* and *hang-after-bulk*.
+
+**--chaos-rate**
+++++++++++++++++
+
+Share of requests answered with a quirk in chaos mode, between *0* and
+*1*. The default is *0.1*.
+
 Full version command responder options
 --------------------------------------
 

@@ -27,6 +27,7 @@ from pysnmp.proto import api
 from pysnmp.proto import rfc1902
 from pysnmp.proto import rfc1905
 
+from snmpsim import chaos
 from snmpsim import confdir
 from snmpsim import controller
 from snmpsim import daemon
@@ -246,6 +247,29 @@ def main():
     )
 
     parser.add_argument(
+        "--chaos",
+        nargs="?",
+        const=chaos.DEFAULT_PRESET,
+        metavar="<PRESET|QUIRK,...>",
+        help="Misbehave like buggy SNMP agents do. Takes a comma separated "
+        "list of presets (%s) and quirks, prefix with - to leave one out. "
+        "Without a value, the %s preset is used. Quirks: %s"
+        % (
+            ", ".join(chaos.PRESETS),
+            chaos.DEFAULT_PRESET,
+            ", ".join(chaos.QUIRKS),
+        ),
+    )
+
+    parser.add_argument(
+        "--chaos-rate",
+        type=float,
+        default=0.1,
+        metavar="<0..1>",
+        help="Share of requests answered with a quirk in chaos mode",
+    )
+
+    parser.add_argument(
         "--data-dir",
         type=str,
         action="append",
@@ -280,6 +304,18 @@ def main():
 
     if args.workers > 1 and not hasattr(os, "fork"):
         parser.error("--workers above 1 is not supported on this platform")
+
+    if not 0 <= args.chaos_rate <= 1:
+        parser.error("--chaos-rate must be between 0 and 1")
+
+    chaos_mode = None
+
+    if args.chaos:
+        try:
+            chaos_mode = chaos.Chaos(chaos.parse_quirks(args.chaos), args.chaos_rate)
+
+        except ValueError as exc:
+            parser.error(str(exc))
 
     if args.debug:
         pysnmp_debug.setLogger(pysnmp_debug.Debug(*args.debug))
@@ -544,6 +580,11 @@ def main():
 
         mib_instrum = contexts[candidate]
 
+        quirky = (
+            chaos_mode is not None
+            and type(mib_instrum) is controller.MibInstrumController
+        )
+
         if pdu_type == fastber.GET_REQUEST:
             backend_fun = mib_instrum.read_variables
 
@@ -570,6 +611,9 @@ def main():
                     getattr(mib_instrum, "read_next_run", None),
                 )
 
+        if quirky and chaos_mode.hung(community_name):
+            return
+
         try:
             var_binds = backend_fun(*req_var_binds)
 
@@ -579,6 +623,20 @@ def main():
         except Exception as exc:
             log.error("Ignoring SNMP engine failure: %s" % exc)
             return
+
+        if quirky:
+            error_status, error_index, var_binds = chaos_mode.apply(
+                community_name,
+                pdu_type,
+                req_var_binds,
+                non_repeaters,
+                max_repetitions,
+                var_binds,
+                mib_instrum,
+            )
+
+            if error_status:
+                return error_status, error_index, var_binds
 
         if not msg_ver:
             for idx, (oid, val) in enumerate(var_binds):
@@ -591,7 +649,9 @@ def main():
         """Handle common requests without pyasn1 message (de)serialization.
 
         Returns the encoded response, None if no response should be sent
-        or raises fastber.Unsupported if the message is not handled.
+        or raises fastber.Unsupported if the message is not handled. In
+        chaos mode, a list of (delay, encoded response) pairs is returned
+        instead of the encoded response.
         """
         (
             msg_ver,
@@ -621,6 +681,18 @@ def main():
 
         error_status, error_index, var_binds = response
 
+        rsp = encode_response(
+            msg_ver, community_name, request_id, error_status, error_index, var_binds
+        )
+
+        if chaos_mode is None:
+            return rsp
+
+        return chaos_mode.wire(transport_address, request_id, rsp)
+
+    def encode_response(
+        msg_ver, community_name, request_id, error_status, error_index, var_binds
+    ):
         try:
             return fastber.encode_response(
                 msg_ver,
@@ -660,8 +732,14 @@ def main():
             pass
 
         else:
-            if rsp is not None:
+            if rsp is None:
+                pass
+
+            elif chaos_mode is None:
                 send(rsp)
+
+            else:
+                chaos.send_packets(send, rsp)
 
             return
 
@@ -719,6 +797,10 @@ def main():
                 transport_address,
             )
 
+            if chaos_mode is not None:
+                # wire quirks are only played by the fast path
+                chaos_mode.wire_quirk = None
+
             if response is None:
                 return whole_msg
 
@@ -770,6 +852,9 @@ def main():
     log.info(
         "Maximum number of variable bindings in SNMP response: %s" % args.max_var_binds
     )
+
+    if chaos_mode is not None:
+        log.info("Running in %s" % chaos_mode)
 
     # full path -> (DataFile, MIB instrumentation), kept across reloads
     loaded_data_files = {}
