@@ -138,6 +138,28 @@ def baseline(cache_dir, tmp_path_factory):
         return {scenario: run(port, scenario) for scenario in SCENARIOS}
 
 
+def test_protocol_preset_keeps_values():
+    assert chaos.PRESETS["protocol"] == [
+        name
+        for name in chaos.PRESETS["safe"]
+        if name not in ("wrong-type", "signed-unsigned", "trailing-nul", "non-utf8")
+    ]
+
+
+@pytest.mark.skipif(not NET_SNMP, reason="needs net-snmp command line tools")
+def test_protocol_preset_walks_recorded_values(cache_dir, tmp_path, baseline):
+    log_path = tmp_path / "responder.log"
+
+    with responder(cache_dir, log_path, "--chaos=protocol", "--chaos-rate=1") as port:
+        for scenario in ("walk-table", "bulkwalk-table"):
+            returncode, stdout, stderr = run(port, scenario, "-t", "0.1")
+
+            assert returncode == 0 and not ERRORS.search(stderr), (stdout, stderr)
+            assert stdout == baseline[scenario][1]
+
+    assert "Chaos quirk" in log_path.read_text()
+
+
 def test_parse_quirks():
     assert chaos.parse_quirks("safe") == chaos.PRESETS["safe"]
     assert chaos.parse_quirks("all,-delay") == [

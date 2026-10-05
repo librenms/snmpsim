@@ -196,6 +196,10 @@ QUIRKS = {
 
 PRESETS = {
     "safe": [name for name, (_, _, safe, _) in QUIRKS.items() if safe],
+    # safe quirks leaving the values of the data file alone
+    "protocol": [
+        name for name, (kind, _, safe, _) in QUIRKS.items() if safe and kind != "value"
+    ],
     "all": list(QUIRKS),
 }
 

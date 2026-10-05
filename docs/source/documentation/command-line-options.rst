@@ -395,6 +395,8 @@ used.
 * *safe* - the quirks net-snmp command line tools cope with when run
   with their default flags. Managers should cope with these without
   per-device settings.
+* *protocol* - the *safe* quirks that leave the values of the simulation
+  data alone, so the values a manager reads are the recorded ones.
 * *all* - all quirks, including those calling for per-device settings
   in the manager, like walking with *-Cc*, fewer max-repetitions, fewer
   OIDs per request or not using GETBULK at all.
