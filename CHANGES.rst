@@ -1,4 +1,12 @@
-.. current-version: 2.0.1 (managed by bump2version)
+.. current-version: 2.0.3 (managed by bump2version)
+
+Revision 2.0.3, LibreNMS fork
+-----------------------------
+
+- Made GETBULK responses that would not fit in a UDP datagram return fewer
+  var-binds instead of being dropped, which made the manager time out and
+  end the walk early (e.g. with large max-repetitions).
+- Made snmpsim-command-responder honour --max-var-binds again.
 
 Revision 2.0.1, LibreNMS fork
 -----------------------------
