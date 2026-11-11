@@ -47,6 +47,9 @@ MAX_MESSAGES_PER_WAKEUP = 64
 
 NULL = univ.Null("")
 
+# Max UDP payload (65507) minus message, community and PDU headers
+MAX_BULK_RESPONSE_SIZE = 65507 - 512
+
 SNMP_2TO1_ERROR_MAP = {
     rfc1902.Counter64.tagSet: 5,
     rfc1905.NoSuchObject.tagSet: 2,
@@ -474,14 +477,18 @@ def main():
         if R == 1 and M > 0 and read_next_run:
             # a single column is a chain of GETNEXTs, done in one go
             rsp_var_binds.extend(read_next_run(var_binds[0], M))
-            return rsp_var_binds
+            M = 0
 
         while M and R:
             rsp_var_binds.extend(read_next_vars(*var_binds))
             var_binds = rsp_var_binds[-R:]
             M -= 1
 
-        return rsp_var_binds
+        # Send fewer var-binds rather than an oversized datagram
+        # (RFC 3416, 4.2.3)
+        return utils.fit_var_binds(
+            rsp_var_binds, MAX_BULK_RESPONSE_SIZE, min_count=max(N, 1)
+        )
 
     @functools.lru_cache(maxsize=4096)
     def select_context(transport_domain, source_address, community_name):

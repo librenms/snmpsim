@@ -139,3 +139,32 @@ def run_in_new_loop(coroutine):
     thread.join()
 
     return result
+
+
+def _varbind_size(oid, value):
+    """Return an upper bound of the BER-encoded size of a single var-bind"""
+    from pyasn1.codec.ber import encoder
+    from pysnmp.proto import rfc1902
+
+    body = len(encoder.encode(rfc1902.ObjectName(oid))) + len(encoder.encode(value))
+
+    # SEQUENCE tag + length octets
+    return body + 1 + (1 if body < 0x80 else 1 + (body.bit_length() + 7) // 8)
+
+
+def fit_var_binds(var_binds, max_size, min_count=0):
+    """Drop trailing var-binds so their total encoded size fits `max_size`.
+
+    RFC 3416, 4.2.3: if the GETBULK response would not fit in a message,
+    the response is generated with a lesser number of variable bindings.
+    At least `min_count` var-binds are always kept.
+    """
+    total = 0
+
+    for idx, (oid, value) in enumerate(var_binds):
+        total += _varbind_size(oid, value)
+
+        if total > max_size and idx >= min_count:
+            return var_binds[:idx]
+
+    return var_binds

@@ -27,6 +27,7 @@ from pysnmp.entity import config
 from pysnmp.entity import engine
 from pysnmp.entity.rfc3413 import cmdrsp
 from pysnmp.entity.rfc3413 import context
+from pysnmp.proto.api import v2c
 
 from snmpsim import confdir
 from snmpsim import controller
@@ -205,6 +206,44 @@ class NextCommandResponder(cmdrsp.NextCommandResponder):
 
 class BulkCommandResponder(cmdrsp.BulkCommandResponder):
     """v3arch GETBULK command handler"""
+
+    # PDU header, error status/index and var-bind list SEQUENCE overhead
+    PDU_OVERHEAD = 32
+
+    _non_repeaters = 0
+
+    def handle_management_operation(
+        self, snmp_engine, state_reference, context_name, pdu
+    ):
+        self._non_repeaters = max(int(v2c.apiBulkPDU.get_non_repeaters(pdu)), 0)
+
+        return cmdrsp.BulkCommandResponder.handle_management_operation(
+            self, snmp_engine, state_reference, context_name, pdu
+        )
+
+    def send_varbinds(
+        self, snmp_engine, state_reference, error_status, error_index, var_binds
+    ):
+        # Without this, pysnmp silently drops oversized responses and the
+        # manager times out. Send fewer var-binds instead (RFC 3416, 4.2.3).
+        pending_reqs = getattr(self, "_CommandResponderBase__pendingReqs", {})
+
+        try:
+            max_size = pending_reqs[state_reference][9]
+
+        except (KeyError, IndexError, TypeError):
+            max_size = None
+
+        if max_size and var_binds:
+            var_binds = utils.fit_var_binds(
+                var_binds,
+                int(max_size) - self.PDU_OVERHEAD,
+                min_count=max(self._non_repeaters, 1),
+            )
+
+        return cmdrsp.BulkCommandResponder.send_varbinds(
+            self, snmp_engine, state_reference, error_status, error_index, var_binds
+        )
 
     def handleMgmtOperation(
         self, snmp_engine, state_reference, context_name, pdu, ac_info
@@ -1078,7 +1117,7 @@ configured automatically based on simulation data file paths relative to
                 NextCommandResponder(snmp_engine, snmp_context)
                 BulkCommandResponder(
                     snmp_engine, snmp_context
-                ).maxVarBinds = local_max_var_binds
+                ).max_varbinds = local_max_var_binds
 
                 log.msg.dec_ident()
 
